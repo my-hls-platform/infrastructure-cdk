@@ -1,6 +1,6 @@
 import * as cdk from 'aws-cdk-lib'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
-import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
+import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import { Construct } from 'constructs'
 
@@ -32,7 +32,7 @@ export class InfrastructureCdkStack extends cdk.Stack {
 
 		const distribution = new cloudfront.Distribution(this, 'VideoDistribution', {
 			defaultBehavior: {
-				origin: new origins.S3Origin(processedBucket),
+				origin: S3BucketOrigin.withOriginAccessControl(processedBucket),
 				viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
 				allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
 				cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
