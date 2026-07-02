@@ -2,7 +2,7 @@
 	"name": "infrastructure-cdk",
 	"version": "0.1.0",
 	"scripts": {
-		"build": "esbuild src/index.ts --bundle --platform=node --target=node22 --external:@aws-sdk/* --outfile=dist/index.js",
+		"build": "tsc",
 		"watch": "tsc -w",
 		"test": "jest",
 		"cdk": "cdk"
