@@ -158,6 +158,12 @@ export class InfrastructureCdkStack extends cdk.Stack {
 		rawBucket.grantReadWrite(cronLambda)
 		processedBucket.grantReadWrite(cronLambda)
 
+		const cronRule = new events.Rule(this, 'DailyCleanupRule', {
+			schedule: events.Schedule.cron({ minute: '0', hour: '2' }),
+		})
+
+		cronRule.addTarget(new targets.LambdaFunction(cronLambda))
+
 		new cdk.CfnOutput(this, 'RawBucketName', { value: rawBucket.bucketName })
 		new cdk.CfnOutput(this, 'ProcessedBucketName', { value: processedBucket.bucketName })
 		new cdk.CfnOutput(this, 'CloudFrontUrl', {
