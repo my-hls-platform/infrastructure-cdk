@@ -143,5 +143,8 @@ export class InfrastructureCdkStack extends cdk.Stack {
 		new cdk.CfnOutput(this, 'TranscoderLambdaName', {
 			value: transcoderLambda.functionName,
 		})
+		new cdk.CfnOutput(this, 'AiAnalyzerLambdaName', {
+      value: aiLambda.functionName,
+    })
 	}
 }

@@ -1,2 +1,8 @@
+packages:
+  - '.'
+
 allowBuilds:
-  unrs-resolver: true
+  esbuild: true
+  '@ffmpeg-installer/linux-x64': true
+  '@ffmpeg-installer/darwin-x64': true
+  '@ffmpeg-installer/darwin-arm64': true
