@@ -91,11 +91,57 @@ export class InfrastructureCdkStack extends cdk.Stack {
 			}),
 		)
 
+		const aiQueue = new sqs.Queue(this, 'AiAnalyzerQueue', {
+			visibilityTimeout: cdk.Duration.minutes(15),
+		})
+
+		const aiTriggerRule = new events.Rule(this, 'AiTriggerRule', {
+			eventPattern: {
+				source: ['hls-platform.transcoder'],
+				detailType: ['Video.Transcoded'],
+			},
+		})
+		aiTriggerRule.addTarget(new targets.SqsQueue(aiQueue))
+
+		const aiLambda = new lambda.Function(this, 'AiAnalyzerLambda', {
+			runtime: lambda.Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			code: lambda.Code.fromInline('exports.handler = async () => {}'),
+			timeout: cdk.Duration.minutes(1),
+			environment: {
+				CLOUDFRONT_URL: `https://${distribution.distributionDomainName}`,
+			},
+		})
+
+		aiLambda.addToRolePolicy(
+			new cdk.aws_iam.PolicyStatement({
+				actions: ['bedrock:InvokeModel'],
+				resources: [
+					'arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0',
+				],
+			}),
+		)
+
+		aiLambda.addToRolePolicy(
+			new cdk.aws_iam.PolicyStatement({
+				actions: ['events:PutEvents'],
+				resources: ['*'],
+			}),
+		)
+
+		aiLambda.addEventSource(
+			new event_sources.SqsEventSource(aiQueue, {
+				batchSize: 1,
+			}),
+		)
+
 		new cdk.CfnOutput(this, 'RawBucketName', { value: rawBucket.bucketName })
 		new cdk.CfnOutput(this, 'ProcessedBucketName', { value: processedBucket.bucketName })
 		new cdk.CfnOutput(this, 'CloudFrontUrl', {
 			value: `https://${distribution.distributionDomainName}`,
 		})
-    new cdk.CfnOutput(this, 'TranscoderLambdaName', { value: transcoderLambda.functionName });
+		new cdk.CfnOutput(this, 'TranscoderLambdaName', {
+			value: transcoderLambda.functionName,
+		})
 	}
 }
