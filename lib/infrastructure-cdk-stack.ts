@@ -135,6 +135,29 @@ export class InfrastructureCdkStack extends cdk.Stack {
 			}),
 		)
 
+		const statsTable = new cdk.aws_dynamodb.Table(this, 'PlatformStats', {
+			partitionKey: { name: 'pk', type: cdk.aws_dynamodb.AttributeType.STRING },
+			sortKey: { name: 'sk', type: cdk.aws_dynamodb.AttributeType.STRING },
+			billingMode: cdk.aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		})
+
+		const cronLambda = new lambda.Function(this, 'CronJobsLambda', {
+			runtime: lambda.Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			code: lambda.Code.fromInline('exports.handler = async () => {}'),
+			timeout: cdk.Duration.minutes(5),
+			environment: {
+				STATS_TABLE_NAME: statsTable.tableName,
+				RAW_BUCKET_NAME: rawBucket.bucketName,
+				PROCESSED_BUCKET_NAME: processedBucket.bucketName,
+			},
+		})
+
+		statsTable.grantWriteData(cronLambda)
+		rawBucket.grantReadWrite(cronLambda)
+		processedBucket.grantReadWrite(cronLambda)
+
 		new cdk.CfnOutput(this, 'RawBucketName', { value: rawBucket.bucketName })
 		new cdk.CfnOutput(this, 'ProcessedBucketName', { value: processedBucket.bucketName })
 		new cdk.CfnOutput(this, 'CloudFrontUrl', {
@@ -144,7 +167,9 @@ export class InfrastructureCdkStack extends cdk.Stack {
 			value: transcoderLambda.functionName,
 		})
 		new cdk.CfnOutput(this, 'AiAnalyzerLambdaName', {
-      value: aiLambda.functionName,
-    })
+			value: aiLambda.functionName,
+		})
+		new cdk.CfnOutput(this, 'StatsTableName', { value: statsTable.tableName })
+		new cdk.CfnOutput(this, 'CronLambdaName', { value: cronLambda.functionName })
 	}
 }
