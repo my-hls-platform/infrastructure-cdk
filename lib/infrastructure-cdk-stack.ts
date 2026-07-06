@@ -1,10 +1,17 @@
 import * as cdk from 'aws-cdk-lib'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
+import * as cloudfront_origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
+import * as ec2 from 'aws-cdk-lib/aws-ec2'
+import * as ecr from 'aws-cdk-lib/aws-ecr'
+import * as ecs from 'aws-cdk-lib/aws-ecs'
+import * as ecs_patterns from 'aws-cdk-lib/aws-ecs-patterns'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
+import * as iam from 'aws-cdk-lib/aws-iam'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as event_sources from 'aws-cdk-lib/aws-lambda-event-sources'
+import * as rds from 'aws-cdk-lib/aws-rds'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as sqs from 'aws-cdk-lib/aws-sqs'
 import { Construct } from 'constructs'
@@ -164,6 +171,126 @@ export class InfrastructureCdkStack extends cdk.Stack {
 
 		cronRule.addTarget(new targets.LambdaFunction(cronLambda))
 
+		const frontendBucket = new s3.Bucket(this, 'FrontendHostingBucket', {
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+			autoDeleteObjects: true,
+			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+		})
+
+		const frontendDistribution = new cloudfront.Distribution(
+			this,
+			'FrontendDistribution',
+			{
+				defaultBehavior: {
+					origin: S3BucketOrigin.withOriginAccessControl(frontendBucket),
+					viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+				},
+				defaultRootObject: 'index.html',
+				errorResponses: [
+					{
+						httpStatus: 404,
+						responseHttpStatus: 200,
+						responsePagePath: '/index.html',
+					},
+					{
+						httpStatus: 403,
+						responseHttpStatus: 200,
+						responsePagePath: '/index.html',
+					},
+				],
+			},
+		)
+
+		const vpc = new ec2.Vpc(this, 'HlsVpc', {
+			maxAzs: 2,
+			natGateways: 1,
+		})
+
+		const dbInstance = new rds.DatabaseInstance(this, 'CoreApiDb', {
+			engine: rds.DatabaseInstanceEngine.mysql({
+				version: rds.MysqlEngineVersion.VER_8_0,
+			}),
+			vpc,
+			vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+			instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+			databaseName: 'hls_platform',
+			credentials: rds.Credentials.fromGeneratedSecret('admin'),
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+			deletionProtection: false,
+		})
+
+		const apiRepo = new ecr.Repository(this, 'CoreApiRepo', {
+			repositoryName: 'hls-core-api-repo',
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+			emptyOnDelete: true,
+		})
+
+		const cluster = new ecs.Cluster(this, 'CoreApiCluster', { vpc })
+
+		const fargateService = new ecs_patterns.ApplicationLoadBalancedFargateService(
+			this,
+			'CoreApiService',
+			{
+				cluster,
+				cpu: 256,
+				memoryLimitMiB: 512,
+				circuitBreaker: { rollback: true },
+				taskImageOptions: {
+					image: ecs.ContainerImage.fromEcrRepository(apiRepo, 'latest'),
+					containerPort: 3001,
+					environment: {
+						PORT: '3001',
+						DATABASE_URL: 'mysql://user:pass@127.0.0.1:3306/dummy',
+						
+					},
+				},
+				publicLoadBalancer: true,
+			},
+		)
+
+		dbInstance.connections.allowFrom(
+			fargateService.service,
+			ec2.Port.tcp(3306),
+			'Allow ECS to DB',
+		)
+
+		rawBucket.grantReadWrite(fargateService.taskDefinition.taskRole)
+		fargateService.taskDefinition.taskRole.addToPrincipalPolicy(
+			new iam.PolicyStatement({
+				actions: ['events:PutEvents'],
+				resources: ['*'],
+			}),
+		)
+
+		const backendDistribution = new cloudfront.Distribution(this, 'BackendDistribution', {
+			defaultBehavior: {
+				origin: new cloudfront_origins.HttpOrigin(
+					fargateService.loadBalancer.loadBalancerDnsName,
+					{
+						protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+					},
+				),
+				viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+				allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+				cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+				originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+			},
+		})
+
+		new cdk.CfnOutput(this, 'DatabaseSecretArn', {
+			value: dbInstance.secret?.secretArn || '',
+		})
+
+		new cdk.CfnOutput(this, 'FrontendBucketNameOutput', {
+			value: frontendBucket.bucketName,
+		})
+		new cdk.CfnOutput(this, 'FrontendCloudFrontIdOutput', {
+			value: frontendDistribution.distributionId,
+		})
+		new cdk.CfnOutput(this, 'FrontendWebsiteUrl', {
+			value: `https://${frontendDistribution.distributionDomainName}`,
+		})
+
 		new cdk.CfnOutput(this, 'RawBucketName', { value: rawBucket.bucketName })
 		new cdk.CfnOutput(this, 'ProcessedBucketName', { value: processedBucket.bucketName })
 		new cdk.CfnOutput(this, 'CloudFrontUrl', {
@@ -177,5 +304,13 @@ export class InfrastructureCdkStack extends cdk.Stack {
 		})
 		new cdk.CfnOutput(this, 'StatsTableName', { value: statsTable.tableName })
 		new cdk.CfnOutput(this, 'CronLambdaName', { value: cronLambda.functionName })
+
+		new cdk.CfnOutput(this, 'EcsClusterName', { value: cluster.clusterName })
+		new cdk.CfnOutput(this, 'EcsServiceName', {
+			value: fargateService.service.serviceName,
+		})
+		new cdk.CfnOutput(this, 'BackendHttpsUrl', {
+			value: `https://${backendDistribution.distributionDomainName}`,
+		})
 	}
 }
